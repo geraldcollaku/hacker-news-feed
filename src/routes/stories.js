@@ -64,7 +64,12 @@ router.get('/story/:storyId/detail', async (req, res) => {
       }));
 
     res.json({
-      ...story,
+      id: story.id,
+      title: story.title,
+      url: story.url,
+      score: story.score,
+      created_at: new Date(story.time * 1000).toISOString(),
+      author: { username: story.by },
       comments,
     });
   } catch (err) {
