@@ -52,11 +52,15 @@ router.get('/story/:storyId/detail', async (req, res) => {
     if (!story) return res.status(404).json({ error: 'Story not found' });
 
     const kidIds = story.kids || [];
-    const comments = await Promise.all(kidIds.map((id) => getItem(id).catch(() => null)));
+    const rawComments = await Promise.all(kidIds.map((id) => getItem(id).catch(() => null)));
+
+    const comments = rawComments
+      .filter(Boolean)
+      .map(({ by, text, time }) => ({ author: by, comment: text, timestamp: time }));
 
     res.json({
       ...story,
-      comments: comments.filter(Boolean),
+      comments,
     });
   } catch (err) {
     res.status(502).json({ error: err.message });
