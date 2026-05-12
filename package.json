@@ -1,0 +1,17 @@
+{
+  "name": "hacker-news-feed",
+  "version": "1.0.0",
+  "description": "Hacker News Feed API with pagination",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-fetch": "^2.7.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
