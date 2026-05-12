@@ -56,7 +56,7 @@ router.get('/story/:storyId/detail', async (req, res) => {
 
     const comments = rawComments
       .filter(Boolean)
-      .map(({ by, text, time }) => ({ author: by, comment: text, timestamp: time }));
+      .map(({ by, text, time }) => ({ author: by, comment: text, timestamp: new Date(time * 1000).toISOString() }));
 
     res.json({
       ...story,
