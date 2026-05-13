@@ -63,18 +63,23 @@ router.get('/item/:storyId', async (req, res) => {
   }
 });
 
-// GET /story/:storyId/comments — comment IDs for FeedCommentsMapper
+// GET /story/:storyId/comments
 router.get('/story/:storyId/comments', async (req, res) => {
   try {
     const storyId = parseInt(req.params.storyId);
     if (isNaN(storyId)) return res.status(400).json({ error: 'Invalid story ID' });
 
     const { rows } = await pool.query(
-      'SELECT id FROM comments WHERE story_id = $1 ORDER BY created_at ASC',
+      'SELECT id, message, created_at, username FROM comments WHERE story_id = $1 ORDER BY created_at ASC',
       [storyId]
     );
 
-    res.json({ ids: rows.map((c) => c.id) });
+    res.json(rows.map((c) => ({
+      id: c.id,
+      message: c.message,
+      created_at: c.created_at,
+      author: { username: c.username },
+    })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
