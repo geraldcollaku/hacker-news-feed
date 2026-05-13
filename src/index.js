@@ -13,6 +13,10 @@ app.get('/health', (_, res) => res.json({ status: 'ok' }));
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
 async function bootstrap() {
+  if (!process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL environment variable is not set');
+  }
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS stories (
       id         INTEGER PRIMARY KEY,
