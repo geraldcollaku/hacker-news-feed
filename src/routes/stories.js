@@ -1,5 +1,5 @@
 const express = require('express');
-const { getNewStoryIds, getItem } = require('../hnClient');
+const pool = require('../db');
 
 const router = express.Router();
 const PAGE_SIZE = 10;
@@ -8,22 +8,26 @@ const PAGE_SIZE = 10;
 router.get('/newstories', async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
-    const ids = await getNewStoryIds();
+    const offset = (page - 1) * PAGE_SIZE;
 
-    const totalItems = ids.length;
-    const totalPages = Math.ceil(totalItems / PAGE_SIZE);
-    const start = (page - 1) * PAGE_SIZE;
-    const pageIds = ids.slice(start, start + PAGE_SIZE);
+    const [{ rows }, { rows: countRows }] = await Promise.all([
+      pool.query(
+        'SELECT id FROM stories ORDER BY created_at DESC LIMIT $1 OFFSET $2',
+        [PAGE_SIZE, offset]
+      ),
+      pool.query('SELECT COUNT(*) FROM stories'),
+    ]);
 
+    const totalItems = parseInt(countRows[0].count);
     res.json({
       page,
-      totalPages,
+      totalPages: Math.ceil(totalItems / PAGE_SIZE),
       totalItems,
       pageSize: PAGE_SIZE,
-      ids: pageIds,
+      ids: rows.map((r) => r.id),
     });
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -33,47 +37,58 @@ router.get('/item/:storyId', async (req, res) => {
     const storyId = parseInt(req.params.storyId);
     if (isNaN(storyId)) return res.status(400).json({ error: 'Invalid story ID' });
 
-    const item = await getItem(storyId);
-    if (!item) return res.status(404).json({ error: 'Item not found' });
+    const { rows } = await pool.query('SELECT * FROM stories WHERE id = $1', [storyId]);
+    if (!rows.length) return res.status(404).json({ error: 'Item not found' });
 
-    res.json(item);
+    const s = rows[0];
+    res.json({
+      id: s.id,
+      title: s.title,
+      url: s.url,
+      score: s.score,
+      username: s.username,
+      created_at: s.created_at,
+    });
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// GET /story/:storyId/detail — story with top-level comments resolved
+// GET /story/:storyId/detail
 router.get('/story/:storyId/detail', async (req, res) => {
   try {
     const storyId = parseInt(req.params.storyId);
     if (isNaN(storyId)) return res.status(400).json({ error: 'Invalid story ID' });
 
-    const story = await getItem(storyId);
-    if (!story) return res.status(404).json({ error: 'Story not found' });
+    const [storyResult, commentsResult] = await Promise.all([
+      pool.query('SELECT * FROM stories WHERE id = $1', [storyId]),
+      pool.query(
+        'SELECT * FROM comments WHERE story_id = $1 ORDER BY created_at ASC',
+        [storyId]
+      ),
+    ]);
 
-    const kidIds = story.kids || [];
-    const rawComments = await Promise.all(kidIds.map((id) => getItem(id).catch(() => null)));
+    if (!storyResult.rows.length) return res.status(404).json({ error: 'Story not found' });
 
-    const comments = rawComments
-      .filter(Boolean)
-      .map(({ id, by, text, time }) => ({
-        id,
-        message: text,
-        created_at: new Date(time * 1000).toISOString(),
-        author: { username: by },
-      }));
+    const s = storyResult.rows[0];
+    const comments = commentsResult.rows.map((c) => ({
+      id: c.id,
+      message: c.message,
+      created_at: c.created_at,
+      author: { username: c.username },
+    }));
 
     res.json({
-      id: story.id,
-      title: story.title,
-      url: story.url,
-      score: story.score,
-      created_at: new Date(story.time * 1000).toISOString(),
-      author: { username: story.by },
+      id: s.id,
+      title: s.title,
+      url: s.url,
+      score: s.score,
+      created_at: s.created_at,
+      author: { username: s.username },
       comments,
     });
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
