@@ -57,6 +57,7 @@ router.get('/item/:storyId', async (req, res) => {
       descendants: kids.length,
       kids,
       type: 'story',
+      image: `https://picsum.photos/seed/${s.id}/600/400`,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -77,7 +78,7 @@ router.get('/story/:storyId/comments', async (req, res) => {
     res.json(rows.map((c) => ({
       id: c.id,
       message: c.message,
-      created_at: c.created_at,
+      created_at: new Date(c.created_at).toISOString(),
       author: { username: c.username },
     })));
   } catch (err) {
