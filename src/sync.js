@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const { getNewStoryIds, getItem } = require('./hnClient');
 const pool = require('./db');
+const { ensureCommentsForStory } = require('./seedComments');
 
 async function upsertStory(item) {
   await pool.query(
@@ -42,6 +43,9 @@ async function syncStories() {
       if (item.kids?.length) {
         await upsertComments(item.id, item.kids);
       }
+
+      // Guarantee every story has at least 10 comments
+      await ensureCommentsForStory(item.id);
     }
     console.log(`[sync] Done — ${batch.length} stories processed`);
   } catch (err) {
