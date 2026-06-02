@@ -36,6 +36,7 @@ async function bootstrap() {
       synced_at  TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS comments_story_id_idx ON comments(story_id);
+    CREATE INDEX IF NOT EXISTS stories_keyset_idx ON stories(created_at DESC, id DESC);
   `);
 
   startSync();

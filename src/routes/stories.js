@@ -3,7 +3,8 @@ const pool = require('../db');
 const { ensureCommentsForAllStories } = require('../seedComments');
 
 const router = express.Router();
-const PAGE_SIZE = 10;
+const DEFAULT_LIMIT = 10;
+const MAX_LIMIT = 100;
 
 // POST /seed — backfills every story to 10 comments (idempotent)
 router.post('/seed', async (req, res) => {
@@ -11,27 +12,42 @@ router.post('/seed', async (req, res) => {
   res.json(result);
 });
 
-// GET /newstories?page=1
+// GET /newstories?after_id=<id>&limit=<n> — keyset pagination
+//
+// Stories are ordered newest-first by the composite key (created_at, id); id
+// breaks created_at ties so the order is total and stable. The cursor is the
+// last id of the previous page: we look up its (created_at, id) and return the
+// rows strictly "after" it. This avoids OFFSET's drift when rows are inserted.
 router.get('/newstories', async (req, res) => {
   try {
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const offset = (page - 1) * PAGE_SIZE;
+    const limit = Math.min(MAX_LIMIT, Math.max(1, parseInt(req.query.limit) || DEFAULT_LIMIT));
 
-    const [{ rows }, { rows: countRows }] = await Promise.all([
-      pool.query(
-        'SELECT id FROM stories ORDER BY created_at DESC LIMIT $1 OFFSET $2',
-        [PAGE_SIZE, offset]
-      ),
-      pool.query('SELECT COUNT(*) FROM stories'),
-    ]);
+    let afterId = null;
+    if (req.query.after_id != null) {
+      afterId = parseInt(req.query.after_id);
+      if (Number.isNaN(afterId)) return res.status(400).json({ error: 'Invalid after_id' });
+    }
 
-    const totalItems = parseInt(countRows[0].count);
+    // Fetch limit + 1 to detect whether a further page exists.
+    const { rows } = await pool.query(
+      `WITH cursor AS (
+         SELECT created_at, id FROM stories WHERE id = $1
+       )
+       SELECT id FROM stories
+       WHERE $1::int IS NULL
+          OR (created_at, id) < (SELECT created_at, id FROM cursor)
+       ORDER BY created_at DESC, id DESC
+       LIMIT $2`,
+      [afterId, limit + 1]
+    );
+
+    const hasMore = rows.length > limit;
+    const ids = (hasMore ? rows.slice(0, limit) : rows).map((r) => r.id);
+
     res.json({
-      page,
-      totalPages: Math.ceil(totalItems / PAGE_SIZE),
-      totalItems,
-      pageSize: PAGE_SIZE,
-      ids: rows.map((r) => r.id),
+      ids,
+      nextCursor: hasMore ? ids[ids.length - 1] : null,
+      hasMore,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
