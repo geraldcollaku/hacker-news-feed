@@ -12,11 +12,7 @@ app.use('/v0', storiesRouter);
 app.get('/health', (_, res) => res.json({ status: 'ok' }));
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
-async function bootstrap() {
-  if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL environment variable is not set');
-  }
-
+async function migrate() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS stories (
       id         INTEGER PRIMARY KEY,
@@ -38,12 +34,36 @@ async function bootstrap() {
     CREATE INDEX IF NOT EXISTS comments_story_id_idx ON comments(story_id);
     CREATE INDEX IF NOT EXISTS stories_keyset_idx ON stories(created_at DESC, id DESC);
   `);
-
-  startSync();
-
-  app.listen(PORT, () => {
-    console.log(`Hacker News Feed API running on http://localhost:${PORT}`);
-  });
 }
 
-bootstrap().catch((err) => { console.error(err); process.exit(1); });
+// Bring the database online without blocking startup. Retries with backoff so a
+// temporarily-unreachable or recently-recreated database recovers on its own.
+async function initDatabase({ retries = 10, delayMs = 5000 } = {}) {
+  if (!process.env.DATABASE_URL) {
+    console.error('[db] DATABASE_URL is not set; API is up but data routes will fail until it is configured.');
+    return;
+  }
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await migrate();
+      console.log('[db] Schema ready.');
+      startSync();
+      return;
+    } catch (err) {
+      console.error(`[db] Init failed (attempt ${attempt}/${retries}): ${err.message}`);
+      if (attempt < retries) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+
+  console.error('[db] Could not initialize after retries; API stays up, data routes will return errors until the database is reachable.');
+}
+
+// Start listening first so /health passes and the service stays available even
+// when the database is down. Database setup happens in the background.
+app.listen(PORT, () => {
+  console.log(`Hacker News Feed API running on http://localhost:${PORT}`);
+  initDatabase();
+});
