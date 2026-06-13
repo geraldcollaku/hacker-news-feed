@@ -1,16 +1,17 @@
 require('dotenv').config();
 const express = require('express');
 const pool = require('./db');
-const { startSync } = require('./sync');
+const { startSync, syncStories } = require('./sync');
 const storiesRouter = require('./routes/stories');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
-app.use('/v0', storiesRouter);
+
+// Liveness check — must not depend on the database so the service stays "up"
+// even when the DB is unreachable. Defined before the schema middleware.
 app.get('/health', (_, res) => res.json({ status: 'ok' }));
-app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
 async function migrate() {
   await pool.query(`
@@ -36,34 +37,60 @@ async function migrate() {
   `);
 }
 
-// Bring the database online without blocking startup. Retries with backoff so a
-// temporarily-unreachable or recently-recreated database recovers on its own.
-async function initDatabase({ retries = 10, delayMs = 5000 } = {}) {
-  if (!process.env.DATABASE_URL) {
-    console.error('[db] DATABASE_URL is not set; API is up but data routes will fail until it is configured.');
-    return;
+// In serverless there is no boot step, so the schema is ensured lazily on the
+// first DB-touching request and memoized per warm instance.
+let schemaReady;
+function ensureSchema() {
+  if (!schemaReady) {
+    schemaReady = migrate().catch((err) => {
+      schemaReady = undefined; // allow a retry on the next request
+      throw err;
+    });
   }
-
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      await migrate();
-      console.log('[db] Schema ready.');
-      startSync();
-      return;
-    } catch (err) {
-      console.error(`[db] Init failed (attempt ${attempt}/${retries}): ${err.message}`);
-      if (attempt < retries) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
-    }
-  }
-
-  console.error('[db] Could not initialize after retries; API stays up, data routes will return errors until the database is reachable.');
+  return schemaReady;
 }
 
-// Start listening first so /health passes and the service stays available even
-// when the database is down. Database setup happens in the background.
-app.listen(PORT, () => {
-  console.log(`Hacker News Feed API running on http://localhost:${PORT}`);
-  initDatabase();
+app.use(async (req, res, next) => {
+  try {
+    await ensureSchema();
+    next();
+  } catch (err) {
+    res.status(503).json({ error: 'Database unavailable', detail: err.message });
+  }
 });
+
+// Triggered by Vercel Cron (or manually). Bounded so it fits a function timeout.
+// Vercel Cron sends `Authorization: Bearer <CRON_SECRET>` when CRON_SECRET is set.
+app.get('/internal/sync', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 25));
+  const withComments = req.query.comments === 'true';
+
+  try {
+    const result = await syncStories({ limit, withComments });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.use('/v0', storiesRouter);
+app.use((req, res) => res.status(404).json({ error: 'Not found' }));
+
+// Long-running mode (local dev / container host): start the server and the
+// in-process cron sync. Skipped under serverless, where the app is exported as
+// a handler and sync is driven by an external scheduler.
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Hacker News Feed API running on http://localhost:${PORT}`);
+    ensureSchema()
+      .then(() => startSync())
+      .catch((err) => console.error('[db] Init failed:', err.message));
+  });
+}
+
+module.exports = app;

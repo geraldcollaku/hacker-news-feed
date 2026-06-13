@@ -28,34 +28,40 @@ async function upsertComments(storyId, kidIds) {
   }
 }
 
-async function syncStories() {
-  console.log(`[sync] Starting at ${new Date().toISOString()}`);
-  try {
-    const ids = await getNewStoryIds();
-    const batch = ids.slice(0, 100); // sync top 100 newest
+// Sync the newest stories. `limit` bounds how many to process (kept small for
+// serverless time limits); `withComments` controls the slow comment backfill,
+// which can be skipped so a single run fits inside a function timeout.
+async function syncStories({ limit = 100, withComments = true } = {}) {
+  console.log(`[sync] Starting at ${new Date().toISOString()} (limit=${limit}, withComments=${withComments})`);
+  let processed = 0;
+  const ids = await getNewStoryIds();
+  const batch = ids.slice(0, limit);
 
-    for (const id of batch) {
-      const item = await getItem(id).catch(() => null);
-      if (!item || item.type !== 'story') continue;
+  for (const id of batch) {
+    const item = await getItem(id).catch(() => null);
+    if (!item || item.type !== 'story') continue;
 
-      await upsertStory(item);
+    await upsertStory(item);
+    processed++;
 
+    if (withComments) {
       if (item.kids?.length) {
         await upsertComments(item.id, item.kids);
       }
-
       // Guarantee every story has at least 10 comments
       await ensureCommentsForStory(item.id);
     }
-    console.log(`[sync] Done — ${batch.length} stories processed`);
-  } catch (err) {
-    console.error('[sync] Error:', err.message);
   }
+  console.log(`[sync] Done — ${processed} stories processed`);
+  return { processed };
 }
 
+// Long-running (local / container) mode: sync now, then every 5 minutes.
 function startSync() {
-  syncStories(); // run immediately on startup
-  cron.schedule('*/5 * * * *', syncStories); // then every 5 minutes
+  syncStories().catch((err) => console.error('[sync] Error:', err.message));
+  cron.schedule('*/5 * * * *', () =>
+    syncStories().catch((err) => console.error('[sync] Error:', err.message))
+  );
 }
 
-module.exports = { startSync };
+module.exports = { startSync, syncStories };
